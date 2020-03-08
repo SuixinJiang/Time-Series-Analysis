@@ -1,0 +1,162 @@
+---
+title: "Japanese tourists number"
+author: "Suixin Jiang"
+date: "3/7/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(MASS)
+library(lmtest)
+library(tseries)
+library(forecast)
+```
+
+# Import data
+```{r}
+jp <- read.csv('TSA.csv')
+names(jp)
+```
+
+
+# Time-series variables and then run a linear regression model
+```{r}
+tour=ts(jp$Amounts.of.tourists,frequency=12,start=c(2010,1),end=c(2018,12))
+ex.rate=ts(jp$CNY.JPY,frequency=12,start=c(2010,1),end=c(2018,12))
+temp=ts(jp$Average.temperature,frequency=12,start=c(2010,1),end=c(2018,12))
+shopmon=ts(jp$Shopping.month,frequency=12,start=c(2010,1),end=c(2018,12))
+con.rate=ts(jp$Consumption.rate,frequency=12,start=c(2010,1),end=c(2018,12))
+
+lm.mod=lm(tour~ex.rate+temp+as.factor(shopmon)+con.rate,data=jp)
+summary(lm.mod)
+dwtest(lm.mod)
+```
+## The dwtest p-value is very small which indicates autocorrelation problem
+
+# Residuals analysis
+```{r}
+reslm=lm.mod$residuals
+studlm=studres(lm.mod)
+fit=lm.mod$fitted.values
+```
+## QQ plot
+```{r}
+qqnorm(reslm,pch=20)
+qqline(reslm,col='red',lwd=2)
+qqnorm(studlm,pch=20)
+qqline(studlm,col='red',lwd=2)
+```
+## Fitted vs. residuals
+```{r}
+plot(reslm~fit,pch=20)
+abline(h=0,lty=2)
+plot(studlm~fit,pch=20)
+abline(h=0,lty=2)
+```
+## Non-constant variance check
+```{r}
+plot(reslm~jp$CNY.JPY,pch=20)
+plot(reslm~jp$Average.temperature,pch=20)
+plot(reslm~jp$Shopping.month,pch=20)
+plot(reslm~jp$Consumption.rate,pch=20)
+```
+
+# Since the R-squared is to small then considering ARIMA model
+# Split the data into training and testing sets
+```{R}
+tour.train=ts(jp$Amounts.of.tourists[1:96],frequency=12,
+    start=c(2010,1),end=c(2017,12))
+tour.test=ts(jp$Amounts.of.tourists[97:108],frequency=12,
+    start=c(2018,1),end=c(2018,12))
+plot(tour.train)
+acf(tour.train, lag.max=50)
+pacf(tour.train, lag.max=50)
+```
+
+# Plots show seasonality and trend, so we make the 1st differencing to remove trend
+```{r}
+diff1=diff(tour.train)
+plot(diff1)
+acf(diff1,lag.max=50)
+pacf(diff1,lag.max=50)
+model_1=auto.arima(diff1)
+model_1
+```
+## R suggests that model_1 is ARIMA(0,0,2)
+```{r}
+res_1=model_1$residuals
+plot(res_1)
+acf(res_1,lag.max=50)
+pacf(res_1,lag.max=50)
+Box.test(res_1,type='Ljung-Box',fitdf=2,lag=20)
+```
+## p-value is 0.04655. Then we further difference the training data to remove seasonality
+```{r}
+diff2=diff(diff1,differences=1,lag=12)
+model_2=auto.arima(diff2)
+model_2
+```
+## R suggest that model_2 is ARIMA(0,0,1)(0,0,1)[12]
+```{r}
+res_2=model_2$residuals
+plot(res_2)
+acf(res_2,lag.max=50)
+pacf(res_2,lag.max=50)
+Box.test(res_2,type='Ljung-Box',fitdf=5,lag=20)
+```
+## P-value is 0.08488, it is still small, so we step back to the beginning to
+## Consider further split the data, and only use part of them to train the model
+```{r}
+tour.train.new=ts(jp$Amounts.of.tourists[52:96],frequency=12,
+    start=c(2014,4),end=c(2017,12))
+plot(tour.train.new)
+acf(tour.train.new,lag.max=50)
+pacf(tour.train.new,lag.max=50)
+model_3=auto.arima(tour.train.new)
+model_3
+```
+## R suggests model_3 is ARIMA(1,0,0)(0,1,0)[12]
+```{r}
+res_3=model_3$residuals
+plot(res_3,type='p')
+acf(res_3,lag.max=50)
+pacf(res_3,lag.max=50)
+Box.test(res_3,type='Ljung-Box',fitdf=1,lag=20)
+```
+## p-value is 0.9896, model_3 is accepted
+## Then we use testing set to check its accuracy
+```{r}
+pred18=forecast(model_3,h=12,level=95)
+PRED=pred18$mean
+LB=pred18$lower
+UB=pred18$upper
+miny=min(tour.test,PRED,LB,UB)
+maxy=max(tour.test,PRED,LB,UB)
+plot(tour.test,col='lightgray',type='b',lwd=2,ylim=c(miny,maxy))
+lines(PRED,type='b',lty=2,lwd=2)
+lines(LB,lty=2,lwd=2,col='red')
+lines(UB,lty=2,lwd=2,col='red')
+legend('topleft',legend=c('Observed','Predicted','Interval'),lty=c(1,2,2),
+    lwd=c(2,1,1),col=c('lightgray','black','red'),bty='n')
+```
+
+# Further predict tourists in 2019
+```{r}
+tour.new=ts(jp$Amounts.of.tourists[52:108],frequency=12,start=c(2014,4),end=c(2018,12))
+pred1819=forecast(model_3, h=24, level=95)
+PRED1819=pred1819$mean
+LB1819=pred1819$lower
+UB1819=pred1819$upper
+miny1819=min(tour.new, PRED1819,LB1819,UB1819)
+maxy1819=max(tour.new, PRED1819,LB1819,UB1819)
+plot(tour.new,col='lightgray',type='b',lwd=4,xlim=c(2017,2020),ylim=c(miny1819,maxy1819))
+lines(PRED1819,lty=2,lwd=5,type='b')
+lines(LB1819,lty=2,lwd=2,col='red')
+lines(UB1819,lty=2,lwd=2,col='red')
+```
+
+# Predicted tourists number in 2019
+```{r}
+pred1819
+```
